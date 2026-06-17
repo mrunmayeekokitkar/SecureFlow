@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Shield, Lock, Github, ArrowRight, CheckCircle, Search, Cpu } from 'lucide-react';
 import Image from 'next/image';
-import LoginButton from '@/components/ui/login-button';
+import { LoginButton } from '@/components/ui/login-button';
 
 export default function LandingPage() {
   return (
@@ -22,10 +22,6 @@ export default function LandingPage() {
           </div>
           <span className="font-headline font-bold text-xl tracking-tight">SecureFlow</span>
         </div>
-        <div className="hidden md:flex items-center gap-8 text-sm font-medium text-muted-foreground">
-          <Link href="#features" className="hover:text-primary transition-colors">Features</Link>
-          <Link href="/dashboard" className="hover:text-primary transition-colors">Dashboard</Link>
-        </div>
         <div className="flex items-center gap-4">
           <LoginButton />
           <Link href="/dashboard">
@@ -38,7 +34,7 @@ export default function LandingPage() {
       </nav>
 
       {/* Hero Section */}
-      <section className="relative pt-20 pb-32 px-6 overflow-hidden">
+      <section className="relative pt-10 pb-32 px-6 overflow-hidden">
         {/* Background Gradients */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-[600px] bg-[radial-gradient(circle_at_center,rgba(146,123,255,0.08)_0%,transparent_70%)] pointer-events-none" />
         
@@ -118,7 +114,7 @@ export default function LandingPage() {
       </section>
 
       {/* Features Grid */}
-      <section id="features" className="py-32 px-6 bg-card/30">
+      <section id="features" className="pt-6 pb-14 px-6 bg-card/30">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-20">
             <h2 className="font-headline text-3xl md:text-5xl font-bold mb-4">Securing every commit</h2>

@@ -1,21 +1,19 @@
-import { signIn } from "@/auth"
-import { Button } from "@/components/ui/button" // Assuming you have shadcn setup
-import { Github } from "lucide-react"
+import Link from "next/link";
+import { auth } from "@/auth"; // Adjust import path based on your auth.ts location
+import { Button } from "@/components/ui/button";
 
-export default function LoginButton() {
+export async function LoginButton() {
+  // Retrieve the session from NextAuth on the server
+  const session = await auth();
+
+  // If a session exists, the user is logged in
+  const isLoggedIn = !!session;
+
   return (
-    <form
-      action={async () => {
-        "use server"
-        // This server action triggers the GitHub OAuth flow 
-        // and redirects to /dashboard upon success.
-        await signIn("github", { redirectTo: "/dashboard" })
-      }}
-    >
-      <Button type="submit" className="w-full flex items-center gap-2">
-        <Github className="w-5 h-5" />
-        Login with GitHub
+    <Link href={isLoggedIn ? "/dashboard" : "/api/auth/signin"}>
+      <Button variant="outline">
+        {isLoggedIn ? "Dashboard" : "Login"}
       </Button>
-    </form>
-  )
+    </Link>
+  );
 }
