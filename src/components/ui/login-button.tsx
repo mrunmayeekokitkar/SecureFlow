@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { auth } from "@/auth"; // Adjust import path based on your auth.ts location
+import { auth } from "@/auth"; 
 import { Button } from "@/components/ui/button";
 
 export async function LoginButton() {
@@ -10,7 +10,8 @@ export async function LoginButton() {
   const isLoggedIn = !!session;
 
   return (
-    <Link href={isLoggedIn ? "/dashboard" : "/api/auth/signin"}>
+    // Update the href to point to the new /login route
+    <Link href={isLoggedIn ? "/dashboard" : "/login"}>
       <Button variant="outline">
         {isLoggedIn ? "Dashboard" : "Login"}
       </Button>
