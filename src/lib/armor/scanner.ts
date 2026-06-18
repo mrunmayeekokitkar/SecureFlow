@@ -67,6 +67,45 @@ function extractAddedLines(patch: string): string {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+function filterFalsePositives(findings: ScanFinding[]): ScanFinding[] {
+  const safePlaceholders = [
+    'your_', 'actual_', 'secret_here', 'placeholder', 
+    'user:password', 'auth_secret', 'localhost', '127.0.0.1'
+  ];
+
+  return findings.filter(finding => {
+    const lowerSnippet = (finding.codeSnippet || '').toLowerCase();
+    const lowerFile = finding.fileLocation.toLowerCase();
+
+    // 1. Filter out mock secrets in environment templates
+    if (lowerFile.includes('.env.example') || lowerFile.includes('.env.sample')) {
+      // If the flagged snippet contains known placeholder text, discard it
+      if (safePlaceholders.some(safeWord => lowerSnippet.includes(safeWord))) {
+        console.log(`🧹 Filtered false positive in ${finding.fileLocation}: Snippet contained mock placeholder.`);
+        return false;
+      }
+    }
+
+    // 2. Filter out mock credentials and intentional console logs in seed files
+    if (lowerFile.includes('seed.ts')) {
+      if (safePlaceholders.some(safeWord => lowerSnippet.includes(safeWord))) return false;
+      if (lowerSnippet.includes('console.error') || lowerSnippet.includes('console.log')) return false;
+    }
+
+    // 3. Filter out false logic flaws in Prisma schemas
+    if (lowerFile.includes('schema.prisma')) {
+      // If it complains about an Int or String type exposing data, drop it
+      if (lowerSnippet.includes('int') || lowerSnippet.includes('string')) {
+        console.log(`🧹 Filtered false positive in ${finding.fileLocation}: Schema data type flagged as logic flaw.`);
+        return false;
+      }
+    }
+
+    // If it passed all programmatic filters, keep the finding
+    return true;
+  });
+}
+
 export class ArmorIQScanner {
   async scanPullRequest(files: FileChange[], activePolicies: any[] = []): Promise<ScanFinding[]> {
     let combinedContent = '';
@@ -86,8 +125,21 @@ export class ArmorIQScanner {
         continue;
       }
 
+      // --- NEW: Add File-Specific AI Warnings ---
+      let fileContext = "";
+      const lowerFile = file.filename.toLowerCase();
+      
+      if (lowerFile.includes('.env.example') || lowerFile.includes('.env.sample')) {
+        fileContext = " [WARNING: THIS IS A TEMPLATE. ALL SECRETS ARE MOCK PLACEHOLDERS. ONLY FLAG IF YOU SEE A REAL, HIGH-ENTROPY API KEY]";
+      } else if (lowerFile.includes('seed.ts')) {
+        fileContext = " [WARNING: THIS IS A SEED FILE FOR DUMMY DATA. PASSWORDS, EMAILS, AND TOKENS HERE ARE MOCK DATA. DO NOT FLAG MOCK CREDENTIALS.]";
+      } else if (lowerFile.includes('schema.prisma')) {
+        fileContext = " [WARNING: THIS IS A DATABASE SCHEMA, NOT EXECUTABLE LOGIC. DO NOT FLAG DATA TYPES (like Int) AS VULNERABILITIES.]";
+      }
+
       scannedFilesList.push(file.filename);
-      combinedContent += `--- START FILE: ${file.filename} ---\n${addedLines}\n--- END FILE: ${file.filename} ---\n\n`;
+      // Delineate each file with distinct boundary text headers and the new context tag
+      combinedContent += `--- START FILE: ${file.filename}${fileContext} ---\n${addedLines}\n--- END FILE: ${file.filename} ---\n\n`;
     }
 
     if (!combinedContent.trim()) {
@@ -199,7 +251,7 @@ CRITICAL RULES:
           };
         });
 
-        findings = sanitizedFindings;
+        findings = filterFalsePositives(sanitizedFindings);
         success = true;
 
       } catch (error: any) {
