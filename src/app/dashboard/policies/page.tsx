@@ -1,13 +1,9 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Lock, AlertCircle, ShieldCheck, HelpCircle, Plus, Terminal } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Lock, AlertCircle, ShieldCheck, Terminal } from "lucide-react";
+// ADD THESE TOOLTIP IMPORTS:
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import prisma from "@/lib/prisma";
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
@@ -18,44 +14,26 @@ import { ArmorIQService } from "@/lib/armor/iq";
 
 async function togglePolicy(formData: FormData) {
   "use server";
-  const policyId = formData.get("policyId") as string;
-  const currentState = formData.get("currentState") === "true";
-
-  await prisma.policy.update({
-    where: { id: policyId },
-    data: { isActive: !currentState }
-  });
-
-  revalidatePath("/dashboard/policies");
-}
-
-async function createPolicy(formData: FormData) {
-  "use server";
   const session = await auth();
   if (!session?.user?.id) return;
 
-  const name = formData.get("name") as string;
-  const description = formData.get("description") as string;
-  const action = formData.get("action") as string;
-  const severity = formData.get("severity") as string;
-  const conditionsStr = formData.get("conditions") as string;
+  const templateId = formData.get("templateId") as string;
+  const currentState = formData.get("currentState") === "true";
 
-  // Split conditions by new line and remove empty strings
-  const conditions = conditionsStr.split('\n').map(c => c.trim()).filter(c => c !== '');
-
-  const rules = {
-    description,
-    action,
-    severity,
-    conditions
-  };
-
-  await prisma.policy.create({
-    data: {
-      name,
-      rules,
-      isActive: true, // New policies are active by default
-      userId: session.user.id
+  // Upsert ensures we either create the toggle record if it doesn't exist, 
+  // or update the existing one.
+  await prisma.userPolicyToggle.upsert({
+    where: {
+      userId_policyTemplateId: {
+        userId: session.user.id,
+        policyTemplateId: templateId,
+      }
+    },
+    update: { isActive: !currentState },
+    create: {
+      userId: session.user.id,
+      policyTemplateId: templateId,
+      isActive: !currentState,
     }
   });
 
@@ -74,103 +52,42 @@ export default async function PoliciesPage() {
   const userId = session.user.id;
   const userEmail = session.user.email;
 
-  // 1. Fetch only this user's policies
-  const policies = await prisma.policy.findMany({
-    where: { userId },
+  // 1. Fetch ALL global Policy Templates
+  const templates = await prisma.policyTemplate.findMany({
     orderBy: { createdAt: 'desc' }
   });
 
-  // 2. ArmorIQ SDK Integration
+  // 2. Fetch the current user's specific toggle settings
+  const userToggles = await prisma.userPolicyToggle.findMany({
+    where: { userId }
+  });
+
+  // 3. Map user toggles for fast O(1) lookup
+  const toggleMap = new Map(userToggles.map(t => [t.policyTemplateId, t.isActive]));
+
+  // 4. Merge templates with user preferences
+  const policiesToRender = templates.map(template => {
+    // If user hasn't interacted with it yet, fall back to template's default state
+    const isActive = toggleMap.has(template.id) 
+      ? toggleMap.get(template.id) 
+      : template.isDefault;
+      
+    return { ...template, isActive };
+  });
+
+  // 5. ArmorIQ SDK Integration (Only pass the ACTIVE ones)
   const armoriqClient = ArmorIQService.getClient();
   const userScope = armoriqClient.forUser(userEmail); 
-  const compiledPolicy = ArmorIQService.compileToArmorIQPolicy(policies);
+  const activePolicies = policiesToRender.filter(p => p.isActive);
+  const compiledPolicy = ArmorIQService.compileToArmorIQPolicy(activePolicies);
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2">
       <div className="flex justify-between items-end">
         <div>
           <h1 className="font-headline text-3xl font-bold tracking-tight mb-2">ArmorIQ Policies</h1>
-          <p className="text-muted-foreground">Define the automated logic used to protect your main branch.</p>
+          <p className="text-muted-foreground">Toggle automated guardrails used to protect your main branch.</p>
         </div>
-
-        {/* New Policy Dialog */}
-        <Dialog>
-          <DialogTrigger asChild>
-            <Button className="bg-primary text-background hover:bg-primary/90">
-              <Plus className="w-4 h-4 mr-2" /> New Policy
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-[525px] glass-card border-white/10 bg-background/80 backdrop-blur-xl">
-            <form action={createPolicy}>
-              <DialogHeader>
-                <DialogTitle>Create New Policy</DialogTitle>
-                <DialogDescription>
-                  Define new automated guardrails for your agent. These will be compiled into your intent tokens.
-                </DialogDescription>
-              </DialogHeader>
-              
-              <div className="grid gap-5 py-6">
-                <div className="space-y-2">
-                  <Label htmlFor="name">Policy Name</Label>
-                  <Input id="name" name="name" placeholder="e.g., Restrict Production Deletes" required className="bg-black/20 border-white/10" />
-                </div>
-                
-                <div className="space-y-2">
-                  <Label htmlFor="description">Description</Label>
-                  <Input id="description" name="description" placeholder="What does this rule do?" required className="bg-black/20 border-white/10" />
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="action">Action Type</Label>
-                    <Select name="action" defaultValue="DENY">
-                      <SelectTrigger className="bg-black/20 border-white/10">
-                        <SelectValue placeholder="Select Action" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="ALLOW">ALLOW</SelectItem>
-                        <SelectItem value="REVIEW REQUIRED">REVIEW REQUIRED</SelectItem>
-                        <SelectItem value="DENY">DENY</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label htmlFor="severity">Severity</Label>
-                    <Select name="severity" defaultValue="HIGH">
-                      <SelectTrigger className="bg-black/20 border-white/10">
-                        <SelectValue placeholder="Select Severity" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="LOW">LOW</SelectItem>
-                        <SelectItem value="MEDIUM">MEDIUM</SelectItem>
-                        <SelectItem value="HIGH">HIGH</SelectItem>
-                        <SelectItem value="CRITICAL">CRITICAL</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="conditions">Glob Pattern Conditions</Label>
-                  <Textarea 
-                    id="conditions" 
-                    name="conditions" 
-                    placeholder="data-mcp/delete_*&#10;admin-mcp/*" 
-                    className="bg-black/20 border-white/10 min-h-[100px] resize-none" 
-                    required 
-                  />
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Enter one rule pattern per line.</p>
-                </div>
-              </div>
-              
-              <DialogFooter>
-                {/* Note: Next.js standard form submission triggers a revalidatePath, which naturally closes the dialog. */}
-                <Button type="submit" className="w-full sm:w-auto">Save Policy</Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
       </div>
 
       {/* ArmorIQ SDK Integration Preview */}
@@ -191,26 +108,29 @@ export default async function PoliciesPage() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        {policies.length === 0 && (
-          <div className="col-span-2 text-center text-muted-foreground p-8 border border-dashed border-white/10 rounded-xl">
-            No policies found. Create your first policy to get started.
+      {/* Policy Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {policiesToRender.length === 0 && (
+          <div className="col-span-full text-center text-muted-foreground p-8 border border-dashed border-white/10 rounded-xl">
+            No policy templates available. (Administrators need to seed the database).
           </div>
         )}
         
-        {policies.map((policy) => {
+        {policiesToRender.map((policy) => {
+          // Parse conditions safely from JSON
           const rulesMeta = (policy.rules as any) || {};
+          const conditions = Array.isArray(rulesMeta) ? rulesMeta : rulesMeta.conditions || [];
           
           return (
             <PolicyCard 
               key={policy.id}
               id={policy.id}
               title={policy.name}
-              description={rulesMeta.description || "Custom automated logic rule."}
+              description={policy.description}
               isActive={policy.isActive}
-              severity={rulesMeta.severity || "MEDIUM"}
-              action={rulesMeta.action || "REVIEW REQUIRED"}
-              rules={rulesMeta.conditions || []}
+              severity={policy.severity}
+              action={policy.action}
+              rules={conditions}
             />
           );
         })}
@@ -221,45 +141,67 @@ export default async function PoliciesPage() {
 
 function PolicyCard({ id, title, description, isActive, severity, action, rules }: any) {
   return (
-    <Card className={`glass-card relative overflow-hidden flex flex-col ${!isActive && 'opacity-60'}`}>
-      <div className="absolute top-0 right-0 p-6 z-10">
+    <Card className={`glass-card relative overflow-hidden flex flex-col transition-all duration-300 ${isActive ? 'border-primary/30 shadow-[0_0_15px_rgba(var(--primary),0.1)]' : 'opacity-60 border-white/5'}`}>
+      <div className="absolute top-0 right-0 p-5 z-10">
         <form action={togglePolicy}>
-          <input type="hidden" name="policyId" value={id} />
+          <input type="hidden" name="templateId" value={id} />
           <input type="hidden" name="currentState" value={String(isActive)} />
           <button type="submit" className="hover:opacity-80 transition-opacity">
              <Switch checked={isActive} className="pointer-events-none" aria-readonly />
           </button>
         </form>
       </div>
-      <CardHeader>
-        <div className="flex items-center gap-3 mb-2">
+      
+      <CardHeader className="pt-6">
+        <div className="flex items-center gap-3 mb-3">
           <div className={`p-2 rounded-lg ${isActive ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
-            <Lock className="w-5 h-5" />
+            <Lock className="w-4 h-4" />
           </div>
-          <Badge variant="outline" className="text-[10px] tracking-widest">{action}</Badge>
+          <Badge variant="outline" className={`text-[10px] tracking-widest ${isActive ? 'border-primary/50 text-primary' : ''}`}>
+            {action}
+          </Badge>
         </div>
-        <CardTitle className="text-xl">{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
+        
+        {/* --- NEW TOOLTIP WRAPPER --- */}
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <CardTitle className="text-lg pr-12">{title}</CardTitle>
+            </TooltipTrigger>
+            <TooltipContent 
+              side="bottom" 
+              align="start" 
+              className="max-w-xs md:max-w-sm glass-card bg-black/90 border-white/10 text-slate-200 z-50 p-3"
+            >
+              <p className="text-xs leading-relaxed">{description}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>        
       </CardHeader>
+      
       <CardContent className="space-y-4 flex-1">
         <div className="space-y-2">
-          {rules.length > 0 ? rules.map((rule: string, i: number) => (
-            <div key={i} className="flex items-start gap-3 text-xs text-muted-foreground p-3 bg-white/5 border border-white/5 rounded-lg">
-              <ShieldCheck className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-              {rule}
+          {rules.length > 0 ? rules.slice(0, 3).map((rule: string, i: number) => (
+            <div key={i} className="flex items-start gap-3 text-xs text-muted-foreground p-2.5 bg-white/5 border border-white/5 rounded-md">
+              <ShieldCheck className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
+              <span className="font-mono text-[10px] truncate">{rule}</span>
             </div>
           )) : (
-            <div className="text-xs text-muted-foreground italic">No conditions defined.</div>
+            <div className="text-xs text-muted-foreground italic p-2">Standard protection enabled.</div>
+          )}
+          {rules.length > 3 && (
+             <div className="text-[10px] text-muted-foreground pl-2 italic">
+               + {rules.length - 3} more condition{rules.length - 3 > 1 ? 's' : ''}
+             </div>
           )}
         </div>
       </CardContent>
-      <CardFooter className="pt-4 flex items-center justify-between border-t border-white/5 text-[10px] font-bold uppercase text-muted-foreground mt-auto">
-        <div className="flex items-center gap-2">
-          <AlertCircle className="w-3 h-3" /> Minimum Severity: {severity}
+      
+      <CardFooter className="pt-4 flex items-center justify-between border-t border-white/5 text-[10px] font-bold uppercase text-muted-foreground mt-auto bg-black/10">
+        <div className="flex items-center gap-1.5">
+          <AlertCircle className={`w-3 h-3 ${severity === 'CRITICAL' && isActive ? 'text-red-400' : ''}`} /> 
+          {severity}
         </div>
-        <button className="hover:text-white transition-colors flex items-center gap-1">
-          Edit Rules <HelpCircle className="w-3 h-3" />
-        </button>
       </CardFooter>
     </Card>
   );
