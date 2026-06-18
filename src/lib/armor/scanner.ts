@@ -24,14 +24,9 @@ export class ArmorIQScanner {
     for (const file of files) {
       const prompt = `Analyze the following code changes (git patch) for security vulnerabilities.
 Look for:
-1. Hardcoded secrets (actual string values like "sk-...", NOT environment variable references).
-2. Contextual leaks (e.g., explicitly logging secrets to the console, exposing sensitive data to clients).
+1. Hardcoded secrets (actual string values like "sk-...").
+2. Contextual leaks (explicitly logging variables to the console or exposing them to clients).
 3. Logic flaws.
-
-CRITICAL EXCEPTIONS (DO NOT FLAG THESE):
-- Using standard configuration modules like "dotenv" or "dotenv/config" is SAFE and expected. Do not flag this.
-- Reading from "process.env" (e.g., process.env.API_KEY) is SAFE backend behavior. It is NOT a hardcoded secret.
-- Only flag "process.env" if the variable is being directly printed to logs (e.g., console.log(process.env.SECRET)) or returned in an API response.
 
 File: ${file.filename}
 Patch:
@@ -42,7 +37,7 @@ Format:
 [{
   "type": "Data Leak | Vulnerability | Misconfig",
   "severity": "CRITICAL | HIGH | MEDIUM | LOW",
-  "description": "Detailed explanation of what the vulnerability is.",
+  "description": "Detailed explanation.",
   "fileLocation": "${file.filename}",
   "codeSnippet": "The specific problematic line(s) of code"
 }]`;
@@ -50,7 +45,16 @@ Format:
       try {
         const chatCompletion = await groq.chat.completions.create({
           messages: [
-            { role: 'system', content: 'You are an elite application security auditor. Output raw JSON only.' },
+            {
+              role: 'system',
+              content: `You are an elite application security auditor. Output raw JSON only.
+              
+CRITICAL RULES:
+1. ONLY flag actual, executable vulnerabilities in the code structure.
+2. IGNORE theoretical or infrastructure-level risks (e.g., do not flag environment variables just because a server "could" be compromised).
+3. IGNORE any code found inside strings, comments, or template literals. Do not scan text that is meant to be a prompt or instruction.
+4. Reading from "process.env" or importing "dotenv" is strictly SAFE and expected backend behavior. NEVER flag this.` 
+            },
             { role: 'user', content: prompt }
           ],
           model: 'llama-3.3-70b-versatile',
