@@ -1,14 +1,14 @@
 'use server';
 /**
- * @fileOverview A Genkit flow that generates plain-English explanations and remediation suggestions for security findings.
+ * @fileOverview A Groq-powered flow that generates plain-English explanations and remediation suggestions for security findings.
  *
  * - developerReceivesAISecurityExplanations - A function that handles the AI explanation process.
  * - AISecurityExplanationInput - The input type for the developerReceivesAISecurityExplanations function.
  * - AISecurityExplanationOutput - The return type for the developerReceivesAISecurityExplanations function.
  */
 
-import {ai} from '@/ai/genkit';
-import {z} from 'genkit';
+import { z } from 'zod';
+import Groq from 'groq-sdk';
 
 const AISecurityExplanationInputSchema = z.object({
   findingType: z
@@ -31,40 +31,48 @@ const AISecurityExplanationOutputSchema = z.object({
 });
 export type AISecurityExplanationOutput = z.infer<typeof AISecurityExplanationOutputSchema>;
 
+// Initialize Groq client
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
+
 export async function developerReceivesAISecurityExplanations(
   input: AISecurityExplanationInput
 ): Promise<AISecurityExplanationOutput> {
-  return explainSecurityFindingFlow(input);
-}
+  // Validate the input
+  const validatedInput = AISecurityExplanationInputSchema.parse(input);
 
-const explainSecurityFindingPrompt = ai.definePrompt({
-  name: 'explainSecurityFindingPrompt',
-  input: {schema: AISecurityExplanationInputSchema},
-  output: {schema: AISecurityExplanationOutputSchema},
-  prompt: `You are a security expert. Your task is to explain a security finding in plain English and provide practical remediation suggestions.
+  const prompt = `You are a security expert. Your task is to explain a security finding in plain English and provide practical remediation suggestions.
 
 The explanation should be concise, clear, and easy for a developer to understand. Focus on the impact and risk.
 The remediation suggestions should be actionable, specific steps to fix the issue, including best practices.
 
 Security Finding Details:
-Type: {{{findingType}}}
-Severity: {{{severity}}}
-Description: {{{description}}}
-File Location: {{{fileLocation}}}
+Type: ${validatedInput.findingType}
+Severity: ${validatedInput.severity}
+Description: ${validatedInput.description}
+File Location: ${validatedInput.fileLocation}
 Code Snippet:
-"""{{{codeSnippet}}}"""
+"""
+${validatedInput.codeSnippet}
+"""
 
-Please provide a plain-English explanation and specific remediation suggestions based on the above finding.`,
-});
+Please provide a plain-English explanation and specific remediation suggestions based on the above finding.
+Respond strictly in JSON format with exactly two keys: "explanation" and "remediationSuggestions".`;
 
-const explainSecurityFindingFlow = ai.defineFlow(
-  {
-    name: 'explainSecurityFindingFlow',
-    inputSchema: AISecurityExplanationInputSchema,
-    outputSchema: AISecurityExplanationOutputSchema,
-  },
-  async input => {
-    const {output} = await explainSecurityFindingPrompt(input);
-    return output!;
-  }
-);
+  // Make the API call to Groq
+  const chatCompletion = await groq.chat.completions.create({
+    messages: [
+      { role: 'system', content: 'You are a helpful assistant that strictly outputs JSON.' },
+      { role: 'user', content: prompt }
+    ],
+    model: 'llama-3.3-70b-versatile', 
+    response_format: { type: 'json_object' },
+  });
+
+  const responseText = chatCompletion.choices[0]?.message?.content || '{}';
+  const result = JSON.parse(responseText);
+
+  // Validate the Groq output against the expected schema before returning
+  return AISecurityExplanationOutputSchema.parse(result);
+}
