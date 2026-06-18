@@ -22,12 +22,16 @@ export class ArmorIQScanner {
     const findings: ScanFinding[] = [];
 
     for (const file of files) {
-      // Create a prompt specifically for vulnerability detection
       const prompt = `Analyze the following code changes (git patch) for security vulnerabilities.
 Look for:
-1. Hardcoded secrets.
-2. Contextual leaks (e.g., logging process.env variables, exposing sensitive data to clients).
+1. Hardcoded secrets (actual string values like "sk-...", NOT environment variable references).
+2. Contextual leaks (e.g., explicitly logging secrets to the console, exposing sensitive data to clients).
 3. Logic flaws.
+
+CRITICAL EXCEPTIONS (DO NOT FLAG THESE):
+- Using standard configuration modules like "dotenv" or "dotenv/config" is SAFE and expected. Do not flag this.
+- Reading from "process.env" (e.g., process.env.API_KEY) is SAFE backend behavior. It is NOT a hardcoded secret.
+- Only flag "process.env" if the variable is being directly printed to logs (e.g., console.log(process.env.SECRET)) or returned in an API response.
 
 File: ${file.filename}
 Patch:

@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
 
       await Promise.all(repoPromises);
       console.log(`Successfully installed app and populated ${repositories.length} repositories.`);
-      console.log(process.env.GROQ_API_KEY);
+      console.log(process.env.GROQ_API_KEY)
       // --- EVENT 1: Repository Added (Installation) ---
       await prisma.auditLog.create({
         data: {
@@ -140,8 +140,9 @@ export async function POST(req: NextRequest) {
         pull_number: pull_request.number,
       });
 
+      // UPDATE: Filter out files that were removed
       const fileChanges = pullRequestFiles
-        .filter((file: any) => file.patch) // Ensure there is a code change
+        .filter((file: any) => file.patch && file.status !== 'removed') 
         .map((file: any) => ({
           filename: file.filename,
           patch: file.patch
