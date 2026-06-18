@@ -200,15 +200,22 @@ export async function POST(req: NextRequest) {
         }
       });
 
-      // ==========================================
-      // NEW: Update the initial "Waiting" comment
-      // ==========================================
-      if (enrichedFindings.length > 0) {
+     if (enrichedFindings.length > 0) {
         let commentBody = `### 🛡️ SecureFlow AI Security Report\n\n`;
+        commentBody += `⚠️ Detected **${enrichedFindings.length}** potential issues matching your code policies. Please review them before merging.\n\n`;
+
         enrichedFindings.forEach((f: any) => {
-          commentBody += `**[${f.severity}] ${f.type} in \`${f.fileLocation}\`**\n`;
+          // Determine color indicator badge based on severity
+          const badge = f.severity === 'CRITICAL' ? '🔴 CRITICAL' : (f.severity === 'HIGH' ? '🟠 HIGH' : '🟡 MEDIUM');
+          
+          commentBody += `#### ${badge} | **${f.type}** in \`${f.fileLocation}\`\n`;
           commentBody += `> ${f.explanation}\n\n`;
-          commentBody += `**Remediation:** ${f.remediation}\n\n---\n`;
+          
+          // Use collapsible HTML blocks so remediation details don't drown out the screen real estate
+          commentBody += `<details>\n<summary><b>🛠️ View Remediation Suggestions</b></summary>\n\n`;
+          commentBody += `${f.remediation}\n\n`;
+          commentBody += `</details>\n\n`;
+          commentBody += `---\n\n`;
         });
 
         // Update the comment we created earlier
