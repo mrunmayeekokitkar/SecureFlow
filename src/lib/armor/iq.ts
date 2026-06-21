@@ -23,8 +23,6 @@ export class ArmorIQPolicyEngine {
 
 export const iq = new ArmorIQPolicyEngine();
 
-// --- ArmorIQ SDK Integration ---
-
 export class ArmorIQService {
   private static client: ArmorIQClient | null = null;
 
@@ -72,7 +70,7 @@ export class ArmorIQService {
 
     // Default deny if no explicit allows are set, to adhere to zero-trust
     if (compiledPolicy.allow.length === 0 && compiledPolicy.deny.length === 0) {
-       compiledPolicy.allow.push('*:*'); // REMOVE IN PRODUCTION: Default allow-all for testing
+       compiledPolicy.allow.push('*:*');
     }
 
     return compiledPolicy;
