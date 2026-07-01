@@ -32,33 +32,30 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, message: 'Awaiting user login via setup URL' });
       }
 
-      // Add all selected repositories to the database
-      const repoPromises = repositories.map((repo: any) => {
-        return prisma.repository.upsert({
-          where: { githubId: BigInt(repo.id) },
-          update: { isActive: true },
-          create: {
-            githubId: BigInt(repo.id),
-            fullName: repo.full_name,
-            owner: repo.full_name.split('/')[0],
-            userId: account.userId, 
+      // Add all selected repositories to the database atomically
+      await prisma.$transaction([
+        ...repositories.map((repo: any) =>
+          prisma.repository.upsert({
+            where: { githubId: BigInt(repo.id) },
+            update: { isActive: true },
+            create: {
+              githubId: BigInt(repo.id),
+              fullName: repo.full_name,
+              owner: repo.full_name.split('/')[0],
+              userId: account.userId,
+            }
+          })
+        ),
+        prisma.auditLog.create({
+          data: {
+            userId: account.userId,
+            action: 'Repository Added',
+            resource: repositories.map((r: any) => r.full_name).join(', '),
+            metadata: { count: repositories.length, event: 'installation' }
           }
-        });
-      });
-
-      await Promise.all(repoPromises);
+        })
+      ]);
       console.log(`Successfully installed app and populated ${repositories.length} repositories.`);
-
-      // --- EVENT 1: Repository Added (Installation) ---
-      await prisma.auditLog.create({
-        data: {
-          userId: account.userId,
-          action: 'Repository Added',
-          resource: repositories.map((r: any) => r.full_name).join(', '),
-          metadata: { count: repositories.length, event: 'installation' }
-        }
-      });
-      // ------------------------------------------------
 
       return NextResponse.json({ success: true, message: 'Repositories populated' });
     }
@@ -73,30 +70,28 @@ export async function POST(req: NextRequest) {
       });
 
       if (account) {
-        const repoPromises = repositories_added.map((repo: any) => {
-          return prisma.repository.upsert({
-            where: { githubId: BigInt(repo.id) },
-            update: { isActive: true },
-            create: {
-              githubId: BigInt(repo.id),
-              fullName: repo.full_name,
-              owner: repo.full_name.split('/')[0],
+        await prisma.$transaction([
+          ...repositories_added.map((repo: any) =>
+            prisma.repository.upsert({
+              where: { githubId: BigInt(repo.id) },
+              update: { isActive: true },
+              create: {
+                githubId: BigInt(repo.id),
+                fullName: repo.full_name,
+                owner: repo.full_name.split('/')[0],
+                userId: account.userId,
+              }
+            })
+          ),
+          prisma.auditLog.create({
+            data: {
               userId: account.userId,
+              action: 'Repository Added',
+              resource: repositories_added.map((r: any) => r.full_name).join(', '),
+              metadata: { count: repositories_added.length, event: 'installation_repositories' }
             }
-          });
-        });
-        await Promise.all(repoPromises);
-
-        // --- EVENT 1: Repository Added (Post-Installation) ---
-        await prisma.auditLog.create({
-          data: {
-            userId: account.userId,
-            action: 'Repository Added',
-            resource: repositories_added.map((r: any) => r.full_name).join(', '),
-            metadata: { count: repositories_added.length, event: 'installation_repositories' }
-          }
-        });
-        // -----------------------------------------------------
+          })
+        ]);
       }
       return NextResponse.json({ success: true, message: 'New repositories added' });
     }
