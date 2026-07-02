@@ -1,98 +1,104 @@
 "use client";
 
+import React from "react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ShieldAlert, Info, CheckCircle2, AlertOctagon, Terminal, Cpu } from "lucide-react";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
-interface FindingsClientProps {
-  findings: any[];
-  stats: { criticalSecrets: number; vulnerabilities: number; misconfigs: number; };
-}
+const mockFindings = [
+  { id: "SEC-01", title: "Hardcoded Database Credentials", severity: "CRITICAL", asset: "backend-api", date: "2026-06-28" },
+  { id: "SEC-02", title: "Permissive CORS Policy Configurations", severity: "HIGH", asset: "gateway-proxy", date: "2026-06-29" },
+  { id: "SEC-03", title: "Outdated Dependency Version (lodash)", severity: "LOW", asset: "frontend-dashboard", date: "2026-07-01" },
+];
 
-export default function FindingsClient({ findings, stats }: FindingsClientProps) {
+export default function FindingsClient() {
   return (
-    <div className="space-y-8 max-w-5xl animate-in fade-in slide-in-from-bottom-2">
+    <div className="w-full space-y-6 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
       <div>
-        <h1 className="font-headline text-3xl font-bold tracking-tight mb-2">Security Findings</h1>
-        <p className="text-muted-foreground">Analysis of all detected issues across your organization.</p>
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Security Findings</h1>
+        <p className="text-sm sm:text-base text-muted-foreground mt-1">
+          Review, sort, and mitigate automated code analysis results.
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatBox icon={<AlertOctagon />} value={stats.criticalSecrets} label="Critical Secrets" color="red" />
-        <StatBox icon={<ShieldAlert />} value={stats.vulnerabilities} label="Vulnerabilities" color="orange" />
-        <StatBox icon={<Info />} value={stats.misconfigs} label="Misconfigs" color="blue" />
-      </div>
-
-      <Card className="glass-card">
-        <CardHeader>
-          <CardTitle className="text-lg">Recent Findings</CardTitle>
+      <Card className="w-full border shadow-sm">
+        <CardHeader className="p-4 sm:p-6">
+          <CardTitle className="text-base sm:text-lg">Vulnerabilities Detected</CardTitle>
         </CardHeader>
-        <CardContent>
-          <Accordion type="single" collapsible className="space-y-4">
-            {findings.map((finding) => (
-              <AccordionItem key={finding.id} value={finding.id} className="border border-white/10 rounded-xl overflow-hidden px-4">
-                <AccordionTrigger className="hover:no-underline py-4">
-                  <div className="flex items-center gap-4 w-full text-left">
-                    <div className="flex-1">
-                      <div className="font-bold text-sm mb-0.5">{finding.type} Detected</div>
-                      <div className="text-[10px] font-mono text-muted-foreground">{finding.fileLocation}</div>
-                    </div>
-                    <Badge className={finding.severity === 'CRITICAL' ? 'bg-red-500' : finding.severity === 'HIGH' ? 'bg-orange-500' : 'bg-blue-500'}>
-                      {finding.severity}
-                    </Badge>
-                  </div>
-                </AccordionTrigger>
-                <AccordionContent className="pb-6 pt-2">
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pl-12 pr-4">
-                    <div className="space-y-6">
-                      <div className="bg-primary/5 border border-primary/20 rounded-xl p-6 relative overflow-hidden group">
-                        <h4 className="text-xs font-bold text-primary uppercase tracking-widest mb-3 flex items-center gap-2">
-                          <Cpu className="w-3 h-3" /> AI Security Explanation
-                        </h4>
-                        <p className="text-sm leading-relaxed text-foreground/90 italic">
-                          &quot;{finding.explanation || 'No explanation provided.'}&quot;
-                        </p>
-                      </div>
-                      
-                      <div>
-                        <h4 className="text-xs font-bold text-green-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                          <CheckCircle2 className="w-3 h-3" /> Remediation Steps
-                        </h4>
-                        <div className="text-sm text-muted-foreground leading-relaxed p-4 bg-white/5 border border-white/5 rounded-xl">
-                          {finding.remediation || 'Follow standard security practices to resolve this.'}
-                        </div>
-                      </div>
-                    </div>
+          <CardContent className="p-0 sm:p-6 sm:pt-0">
+            {/* Scroll block protecting tables on screen views < 768px */}
+            <div className="w-full overflow-x-auto border-b sm:border sm:rounded-lg">
+              <Table className="min-w-[700px] w-full table-auto">
+                <TableHeader className="bg-muted/50">
+                  <TableRow>
+                    <TableHead className="w-[100px] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider">
+                      ID
+                    </TableHead>
+                    <TableHead className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider">
+                      Vulnerability
+                    </TableHead>
+                    <TableHead className="w-[120px] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider">
+                      Severity
+                    </TableHead>
+                    <TableHead className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider">
+                      Asset
+                    </TableHead>
+                    <TableHead className="w-[120px] text-right px-4 py-3 text-xs font-semibold uppercase tracking-wider">
+                      Actions
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
 
-                    <div className="space-y-4">
-                      <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-1 flex items-center gap-2">
-                        <Terminal className="w-3 h-3" /> Source Context
-                      </h4>
-                      <div className="bg-black/40 rounded-xl p-6 font-mono text-[10px] text-primary/80 border border-white/5 overflow-x-auto whitespace-pre">
-                        {finding.codeSnippet || 'Code snippet unavailable.'}
-                      </div>
-                    </div>
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            ))}
-          </Accordion>
+                <TableBody>
+                  {mockFindings.map((finding) => (
+                    <TableRow
+                      key={finding.id}
+                      className="hover:bg-muted/30 transition-colors"
+                    >
+                      <TableCell className="px-4 py-3 text-sm font-mono text-muted-foreground">
+                        {finding.id}
+                      </TableCell>
+
+                      <TableCell className="px-4 py-3 text-sm font-medium text-foreground max-w-xs truncate">
+                        {finding.title}
+                      </TableCell>
+
+                      <TableCell className="px-4 py-3">
+                        <Badge
+                          variant={
+                            finding.severity === "CRITICAL"
+                              ? "destructive"
+                              : finding.severity === "HIGH"
+                              ? "default"
+                              : "secondary"
+                          }
+                          className="text-xs px-2 py-0.5 font-semibold"
+                        >
+                          {finding.severity}
+                        </Badge>
+                      </TableCell>
+
+                      <TableCell className="px-4 py-3 text-sm text-muted-foreground">
+                        {finding.asset}
+                      </TableCell>
+
+                      <TableCell className="px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="min-h-[36px] px-3 text-xs hover:bg-primary hover:text-primary-foreground transition-all"
+                        >
+                          Investigate
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
         </CardContent>
       </Card>
     </div>
   );
-}
-
-function StatBox({ icon, value, label, color }: any) {
-  // Helper for rendering your top stats blocks based on passed color variants.
-  return (
-    <div className={`p-6 rounded-2xl glass-card border-${color}-500/20 flex flex-col items-center text-center`}>
-      <div className={`w-12 h-12 rounded-full bg-${color}-500/10 flex items-center justify-center text-${color}-500 mb-4`}>
-        {icon}
-      </div>
-      <div className="text-2xl font-bold">{value}</div>
-      <div className="text-xs font-bold text-muted-foreground uppercase tracking-widest mt-1">{label}</div>
-    </div>
-  )
 }
