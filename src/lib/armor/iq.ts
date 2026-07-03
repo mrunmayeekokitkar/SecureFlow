@@ -1,5 +1,19 @@
 import { ArmorIQClient, IntentToken } from '@armoriq/sdk';
 import { ScanFinding } from './scanner';
+import prisma from '../prisma';
+import { z } from 'zod';
+
+const armorIQConfigSchema = z.object({
+  apiKey: z.string().default(''),
+  userId: z.string().default('fallback-user'),
+  agentId: z.string().default('fallback-agent'),
+});
+
+const armorIQConfig = armorIQConfigSchema.parse({
+  apiKey: process.env.ARMORIQ_API_KEY || undefined,
+  userId: process.env.USER_ID || undefined,
+  agentId: process.env.AGENT_ID || undefined,
+});
 
 export type PolicyResult = 'PASS' | 'REVIEW REQUIRED' | 'BLOCKED';
 
@@ -16,8 +30,18 @@ export class ArmorIQPolicyEngine {
     return 'PASS';
   }
 
-  getRiskTrend(): number {
-    return Math.random() * 100;
+  async getRiskTrend(): Promise<number> {
+    try {
+      const aggregation = await prisma.scanResult.aggregate({
+        _avg: {
+          riskScore: true,
+        },
+      });
+      return aggregation._avg.riskScore ?? 0;
+    } catch (error) {
+      console.error('Error fetching risk trend:', error);
+      return 0;
+    }
   }
 }
 
@@ -33,9 +57,9 @@ export class ArmorIQService {
   static getClient(): ArmorIQClient {
     if (!ArmorIQService.client) {
       ArmorIQService.client = new ArmorIQClient({
-        apiKey: process.env.ARMORIQ_API_KEY || '', 
-        userId: process.env.USER_ID,
-        agentId: process.env.AGENT_ID
+        apiKey: armorIQConfig.apiKey, 
+        userId: armorIQConfig.userId,
+        agentId: armorIQConfig.agentId
       });
     }
     return ArmorIQService.client;
