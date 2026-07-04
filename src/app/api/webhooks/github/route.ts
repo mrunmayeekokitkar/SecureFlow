@@ -54,6 +54,20 @@ export async function POST(req: NextRequest) {
 
   try {
     const rawPayload = await verifyGitHubWebhook(req);
+
+    const deliveryId = req.headers.get('x-github-delivery');
+    if (deliveryId) {
+      const existingEvent = await prisma.webhookEvent.findUnique({
+        where: { deliveryId }
+      });
+      if (existingEvent) {
+        console.log(`♻️ Skipping duplicate webhook delivery: ${deliveryId}`);
+        return NextResponse.json({ message: "Webhook already processed" }, { status: 202 });
+      }
+      await prisma.webhookEvent.create({
+        data: { deliveryId }
+      });
+    }
     
     // Strict input validation schema
     const repoSchema = z.object({

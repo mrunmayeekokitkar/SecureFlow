@@ -165,3 +165,9 @@ model AuditLog {
 
   @@index([userId])
 }
+
+model WebhookEvent {
+  id         String   @id @default(cuid())
+  deliveryId String   @unique
+  createdAt  DateTime @default(now())
+}
