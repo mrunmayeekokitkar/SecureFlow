@@ -8,7 +8,8 @@ export const metadata: Metadata = {
 
 // Add this viewport export to force a specific width
 export const viewport: Viewport = {
-  width: '1024', // Set to your minimum desktop layout width
+  width: 'device-width',
+  initialScale: 1,
 };
 
 export default function RootLayout({
