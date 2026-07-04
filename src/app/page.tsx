@@ -5,6 +5,8 @@ import { Shield, Lock, Github, ArrowRight, CheckCircle, Search, Cpu, ChevronDown
 import Image from 'next/image';
 import { LoginButton } from '@/components/ui/login-button';
 import { ThemeToggle } from '@/components/theme-toggle';
+
+export const dynamic = 'force-dynamic';
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
