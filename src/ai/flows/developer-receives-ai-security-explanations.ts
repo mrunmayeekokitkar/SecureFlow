@@ -20,7 +20,7 @@ const AISecurityExplanationOutputSchema = z.object({
 export type AISecurityExplanationOutput = z.infer<typeof AISecurityExplanationOutputSchema>;
 
 const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
+  apiKey: process.env.GROQ_API_KEY || 'dummy-key-for-build',
 });
 
 export async function developerReceivesAISecurityExplanations(

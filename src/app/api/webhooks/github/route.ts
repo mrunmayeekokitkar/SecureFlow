@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { createHmac, timingSafeEqual } from 'crypto';
-import { scanner } from '@/lib/armor/scanner';
+import { scanner, ScanFinding } from '@/lib/armor/scanner';
 import { iq } from '@/lib/armor/iq';
 import { developerReceivesAISecurityExplanations } from '@/ai/flows/developer-receives-ai-security-explanations';
 import { App, Octokit } from 'octokit';
@@ -51,6 +51,10 @@ async function verifyGitHubWebhook(req: NextRequest): Promise<any> {
 }
 
 export async function POST(req: NextRequest) {
+  let octokitInstance: any = null;
+  let checkRunId: number | null = null;
+  let repoOwner: string = '';
+  let repoName: string = '';
 
   try {
     const rawPayload = await verifyGitHubWebhook(req);
@@ -123,7 +127,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (event === 'installation' && action === 'created') {
-      const senderId = payload.sender.id.toString();
+      const senderId = payload.sender?.id?.toString() ?? '';
       const account = await prisma.account.findFirst({
         where: { provider: 'github', providerAccountId: senderId },
       });
@@ -135,7 +139,7 @@ export async function POST(req: NextRequest) {
 
       // Add all selected repositories to the database atomically
       await prisma.$transaction([
-        ...repositories.map((repo: any) =>
+        ...(repositories || []).map((repo: any) =>
           prisma.repository.upsert({
             where: { githubId: BigInt(repo.id) },
             update: { isActive: true },
@@ -151,12 +155,12 @@ export async function POST(req: NextRequest) {
           data: {
             userId: account.userId,
             action: 'Repository Added',
-            resource: repositories.map((r: any) => r.full_name).join(', '),
-            metadata: { count: repositories.length, event: 'installation' }
+            resource: (repositories || []).map((r: any) => r.full_name).join(', '),
+            metadata: { count: (repositories || []).length, event: 'installation' }
           }
         })
       ]);
-      console.log(`Successfully installed app and populated ${repositories.length} repositories.`);
+      console.log(`Successfully installed app and populated ${(repositories || []).length} repositories.`);
 
       return NextResponse.json({ success: true, message: 'Repositories populated' });
     }
@@ -165,14 +169,14 @@ export async function POST(req: NextRequest) {
     // 3. NEW: Handle Added Repositories post-installation
     // ==========================================
     if (event === 'installation_repositories' && action === 'added') {
-      const senderId = payload.sender.id.toString();
+      const senderId = payload.sender?.id?.toString() ?? '';
       const account = await prisma.account.findFirst({
         where: { provider: 'github', providerAccountId: senderId },
       });
 
       if (account) {
         await prisma.$transaction([
-          ...repositories_added.map((repo: any) =>
+          ...(repositories_added || []).map((repo: any) =>
             prisma.repository.upsert({
               where: { githubId: BigInt(repo.id) },
               update: { isActive: true },
@@ -188,8 +192,8 @@ export async function POST(req: NextRequest) {
             data: {
               userId: account.userId,
               action: 'Repository Added',
-              resource: repositories_added.map((r: any) => r.full_name).join(', '),
-              metadata: { count: repositories_added.length, event: 'installation_repositories' }
+              resource: (repositories_added || []).map((r: any) => r.full_name).join(', '),
+              metadata: { count: (repositories_added || []).length, event: 'installation_repositories' }
             }
           })
         ]);
@@ -198,14 +202,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (event === 'pull_request') {
-      if (!['opened', 'synchronize', 'reopened'].includes(action)) {
+      if (!['opened', 'synchronize', 'reopened'].includes(action || '')) {
         return NextResponse.json({ message: 'Action not tracked' }, { status: 200 });
       }
 
-      console.log(`Processing PR #${pull_request.number} on ${repository.full_name}`);
+      console.log(`Processing PR #${pull_request?.number ?? 0} on ${repository?.full_name ?? ''}`);
 
       const dbRepo = await prisma.repository.findUnique({
-        where: { githubId: BigInt(repository.id) }
+        where: { githubId: BigInt(repository?.id ?? 0) }
       });
       const userId = dbRepo?.userId;
 
@@ -234,8 +238,8 @@ export async function POST(req: NextRequest) {
         data: {
           userId: userId,
           action: 'Scan Triggered',
-          resource: `${repository.full_name}#${pull_request.number}`,
-          metadata: { action: action, head_sha: pull_request.head.sha }
+          resource: `${repository?.full_name ?? ''}#${pull_request?.number ?? 0}`,
+          metadata: { action: action, head_sha: pull_request?.head?.sha ?? '' }
         }
       });
 
@@ -266,16 +270,30 @@ export async function POST(req: NextRequest) {
           }
         })
       });
-      const octokit = await appClient.getInstallationOctokit(installation.id);
+      const octokit = await appClient.getInstallationOctokit(Number(installation?.id || 0));
+      octokitInstance = octokit;
+      repoOwner = repository?.owner?.login ?? '';
+      repoName = repository?.name ?? '';
+
+      // Create initial "in_progress" check run
+      const checkRun = await octokit.rest.checks.create({
+        owner: repoOwner,
+        repo: repoName,
+        name: 'SecureFlow Scan',
+        head_sha: pull_request?.head?.sha ?? '',
+        status: 'in_progress',
+        started_at: new Date().toISOString(),
+      });
+      checkRunId = checkRun.data.id;
 
       let pullRequestFiles;
       try {
         pullRequestFiles = await octokit.paginate(
           octokit.rest.pulls.listFiles,
           {
-            owner: repository.owner.login,
-            repo: repository.name,
-            pull_number: pull_request.number,
+            owner: repository?.owner?.login ?? '',
+            repo: repository?.name ?? '',
+            pull_number: pull_request?.number ?? 0,
             per_page: 100,
           }
         );
@@ -283,13 +301,13 @@ export async function POST(req: NextRequest) {
         if (error.status === 403 || error.status === 429 || (error.message && error.message.toLowerCase().includes('rate limit'))) {
           console.error('GitHub API rate limit exceeded while fetching PR files:', error);
           
-          await octokit.rest.checks.create({
-            owner: repository.owner.login,
-            repo: repository.name,
-            name: 'SecureFlow Scan',
-            head_sha: pull_request.head.sha,
+          await octokit.rest.checks.update({
+            owner: repoOwner,
+            repo: repoName,
+            check_run_id: checkRunId!,
             status: 'completed',
             conclusion: 'failure',
+            completed_at: new Date().toISOString(),
             output: {
               title: `Scan Failed: API Rate Limit`,
               summary: `Scan failed due to GitHub API rate limits. Please try again later.`,
@@ -316,14 +334,79 @@ export async function POST(req: NextRequest) {
       }
 
       const pendingComment = await octokit.rest.issues.createComment({
-        owner: repository.owner.login,
-        repo: repository.name,
-        issue_number: pull_request.number,
+        owner: repository?.owner?.login ?? '',
+        repo: repository?.name ?? '',
+        issue_number: pull_request?.number ?? 0,
         body: `### ⏳ SecureFlow AI Security Scan\n\nEvaluating **${fileChanges.length}** changed files. Please wait while the AI analyzes the code for potential vulnerabilities...${warningMessage}`,
       });
 
+      // Fetch custom ignore patterns from .secureflowignore if it exists in the root of the repository
+      let customIgnores: string[] = [];
+      try {
+        const { data: ignoreFile } = await octokit.rest.repos.getContent({
+          owner: repoOwner,
+          repo: repoName,
+          path: '.secureflowignore',
+          ref: pull_request?.head?.sha ?? '',
+        });
+
+        if (!Array.isArray(ignoreFile) && ignoreFile.type === 'file' && ignoreFile.content) {
+          const rawContent = Buffer.from(ignoreFile.content, 'base64').toString('utf8');
+          customIgnores = rawContent
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(line => line.length > 0 && !line.startsWith('#'));
+          console.log(`ℹ️ Found .secureflowignore with ${customIgnores.length} custom ignore patterns.`);
+        }
+      } catch (error: any) {
+        if (error.status === 404) {
+          console.log('ℹ️ No .secureflowignore file found in repository root.');
+        } else {
+          console.warn('⚠️ Error fetching .secureflowignore:', error.message || error);
+        }
+      }
+
       // --- UPDATE: Pass the active policies to the scanner ---
-      const findings = await scanner.scanPullRequest(fileChanges, activePolicies);
+      let findings: ScanFinding[];
+      try {
+        findings = await scanner.scanPullRequest(fileChanges, activePolicies, customIgnores);
+      } catch (scanError: any) {
+        console.error('❌ SecureFlow Scan Failed:', scanError);
+        
+        // Update the pending comment to notify the user about the failure
+        await octokit.rest.issues.updateComment({
+          owner: repository?.owner?.login ?? '',
+          repo: repository?.name ?? '',
+          comment_id: pendingComment.data.id,
+          body: `### 🛡️ SecureFlow AI Security Report\n\n❌ **Scan Failed: Analysis Engine Unavailable**\n\nThe security scan failed because the AI analysis engine is currently unavailable (rate limits or repeated API errors). Please trigger the scan again by pushing a new commit or reopening this Pull Request.`,
+        });
+
+        // Update the in-progress check run to failure
+        await octokit.rest.checks.update({
+          owner: repoOwner,
+          repo: repoName,
+          check_run_id: checkRunId!,
+          status: 'completed',
+          conclusion: 'failure',
+          completed_at: new Date().toISOString(),
+          output: {
+            title: 'Scan Failed: Analysis Engine Unavailable',
+            summary: `SecureFlow AI scan failed because the analysis engine is currently unavailable. Error details: ${scanError.message || String(scanError)}`,
+          }
+        });
+
+        // Create audit log for failed scan
+        await prisma.auditLog.create({
+          data: {
+            userId: userId,
+            action: 'Scan Failed',
+            resource: `${repository?.full_name ?? ''}#${pull_request?.number ?? 0}`,
+            metadata: { error: scanError.message || String(scanError) }
+          }
+        });
+
+        return NextResponse.json({ success: false, error: 'Scan Failed: Analysis Engine Unavailable' }, { status: 502 });
+      }
       // -------------------------------------------------------
       
       const enrichedFindings = await Promise.all(findings.map(async (finding: any) => {
@@ -349,20 +432,20 @@ export async function POST(req: NextRequest) {
         data: {
           userId: userId,
           action: 'Policy Evaluation',
-          resource: `${repository.full_name}#${pull_request.number}`,
+          resource: `${repository?.full_name ?? ''}#${pull_request?.number ?? 0}`,
           decision: decision,
           metadata: { findingsCount: findings.length }
         }
       });
       // ----------------------------------
 
-      await octokit.rest.checks.create({
-        owner: repository.owner.login,
-        repo: repository.name,
-        name: 'SecureFlow Scan',
-        head_sha: pull_request.head.sha,
+      await octokit.rest.checks.update({
+        owner: repoOwner,
+        repo: repoName,
+        check_run_id: checkRunId!,
         status: 'completed',
         conclusion: conclusion,
+        completed_at: new Date().toISOString(),
         output: {
           title: `Policy Decision: ${decision}`,
           summary: `SecureFlow detected ${findings.length} potential security issues.`,
@@ -390,8 +473,8 @@ export async function POST(req: NextRequest) {
 
         // Update the comment we created earlier
         await octokit.rest.issues.updateComment({
-          owner: repository.owner.login,
-          repo: repository.name,
+          owner: repository?.owner?.login ?? '',
+          repo: repository?.name ?? '',
           comment_id: pendingComment.data.id,
           body: commentBody,
         });
@@ -401,15 +484,15 @@ export async function POST(req: NextRequest) {
           data: {
             userId: userId,
             action: 'PR Comment Posted',
-            resource: `${repository.full_name}#${pull_request.number}`,
+            resource: `${repository?.full_name ?? ''}#${pull_request?.number ?? 0}`,
             metadata: { commentType: 'AI Security Report', findingsReported: enrichedFindings.length }
           }
         });
       } else {
         // If no findings, update the comment to show success!
         await octokit.rest.issues.updateComment({
-          owner: repository.owner.login,
-          repo: repository.name,
+          owner: repository?.owner?.login ?? '',
+          repo: repository?.name ?? '',
           comment_id: pendingComment.data.id,
           body: `### 🛡️ SecureFlow AI Security Report\n\n✅ Scan completed successfully. No vulnerabilities found in the **${fileChanges.length}** analyzed files.${warningMessage}`,
         });
@@ -418,17 +501,17 @@ export async function POST(req: NextRequest) {
       // Persist PR details to DB
       if (dbRepo) {
         const dbPr = await prisma.pullRequest.upsert({
-          where: { githubId: BigInt(pull_request.id) },
+          where: { githubId: BigInt(pull_request?.id ?? 0) },
           update: {
-            title: pull_request.title,
-            state: pull_request.state, 
+            title: pull_request?.title ?? '',
+            state: pull_request?.state ?? '', 
             status: decision,
           },
           create: {
-            githubId: BigInt(pull_request.id),
-            prNumber: pull_request.number,
-            title: pull_request.title,
-            state: pull_request.state,
+            githubId: BigInt(pull_request?.id ?? 0),
+            prNumber: pull_request?.number ?? 0,
+            title: pull_request?.title ?? '',
+            state: pull_request?.state ?? '',
             status: decision,
             repositoryId: dbRepo.id
           }
@@ -461,8 +544,28 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ message: 'Event successfully caught but ignored' }, { status: 200 });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Webhook Error:', error);
+
+    if (octokitInstance && checkRunId && repoOwner && repoName) {
+      try {
+        await octokitInstance.rest.checks.update({
+          owner: repoOwner,
+          repo: repoName,
+          check_run_id: checkRunId,
+          status: 'completed',
+          conclusion: 'failure',
+          completed_at: new Date().toISOString(),
+          output: {
+            title: 'Scan Failed: Webhook Exception',
+            summary: `SecureFlow encountered an unexpected error during execution. Error details: ${error.message || String(error)}`,
+          }
+        });
+      } catch (checkUpdateError) {
+        console.error('Failed to update GitHub check run on exception:', checkUpdateError);
+      }
+    }
+
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

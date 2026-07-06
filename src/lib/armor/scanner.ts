@@ -15,7 +15,7 @@ export interface FileChange {
 }
 
 const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
+  apiKey: process.env.GROQ_API_KEY || 'dummy-key-for-build',
 });
 
 // Non-executable text, assets, metadata or dependency configurations that shouldn't be audited
@@ -29,7 +29,46 @@ const IGNORED_PATHS = [
   'dist/', 'build/', '.next/', 'node_modules/', 'prisma/migrations/'
 ];
 
-function shouldIgnore(filename: string): boolean {
+function compileIgnorePatterns(patterns: string[]): RegExp[] {
+  return patterns
+    .map(p => p.trim())
+    .filter(p => p.length > 0 && !p.startsWith('#'))
+    .map(p => {
+      let pattern = p.replace(/\\/g, '/');
+      const hasLeadingSlash = pattern.startsWith('/');
+      const cleanPattern = hasLeadingSlash ? pattern.slice(1) : pattern;
+      const patternWithoutTrailingSlash = cleanPattern.endsWith('/') ? cleanPattern.slice(0, -1) : cleanPattern;
+      const isRootRelative = hasLeadingSlash || patternWithoutTrailingSlash.includes('/');
+      
+      let glob = cleanPattern;
+      if (glob.endsWith('/')) {
+        glob += '**';
+      }
+      
+      // Escape regex characters except *, ?
+      let regexStr = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      
+      // Handle question marks first (before introducing any group (?) syntax)
+      regexStr = regexStr.replace(/\?/g, '[^/]');
+      
+      // Handle double asterisks
+      regexStr = regexStr.replace(/\/\*\*\//g, '/(?:.*/)?');
+      regexStr = regexStr.replace(/\*\*\//g, '(?:.*/)?');
+      regexStr = regexStr.replace(/\/\*\**/g, '(?:/.*)?');
+      regexStr = regexStr.replace(/\*\*/g, '.*');
+      
+      // Handle single asterisks
+      regexStr = regexStr.replace(/(?<!\.)\*(?!\.)/g, '[^/]*');
+      
+      if (isRootRelative) {
+        return new RegExp(`^${regexStr}$`, 'i');
+      } else {
+        return new RegExp(`(^|/)${regexStr}$`, 'i');
+      }
+    });
+}
+
+function shouldIgnore(filename: string, customIgnores: RegExp[] = []): boolean {
   const lower = filename.toLowerCase();
   
   // 1. Path-level exclusions
@@ -45,6 +84,12 @@ function shouldIgnore(filename: string): boolean {
   // 3. Ignore configuration wrappers (Note: .env.example is intentionally NOT ignored here)
   const ignorePatterns = ['package.json', 'components.json', 'prisma.config.ts', '.gitignore'];
   if (ignorePatterns.some(pattern => lower.includes(pattern))) {
+    return true;
+  }
+
+  // 4. Custom ignores matching
+  const normalizedPath = filename.replace(/\\/g, '/');
+  if (customIgnores.some(regex => regex.test(normalizedPath))) {
     return true;
   }
 
@@ -64,6 +109,27 @@ function extractAddedLines(patch: string): string {
     // Strip the leading '+' prefix so it passes valid syntax to the LLM
     .map(line => line.slice(1))
     .join('\n');
+}
+
+/**
+ * Split oversized file contents into newline-aware chunks.
+ */
+function splitIntoChunks(text: string, maxChunkSize: number): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + maxChunkSize, text.length);
+    // Prefer splitting at the last newline instead of the middle of a line
+    if (end < text.length) {
+      const lastNewline = text.lastIndexOf("\n", end);
+      if (lastNewline > start) {
+        end = lastNewline;
+      }
+    }
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -112,11 +178,14 @@ function filterFalsePositives(findings: ScanFinding[]): ScanFinding[] {
 }
 
 export class ArmorIQScanner {
-  async scanPullRequest(files: FileChange[], activePolicies: any[] = []): Promise<ScanFinding[]> {
+  async scanPullRequest(files: FileChange[], activePolicies: any[] = [], customIgnores: string[] = []): Promise<ScanFinding[]> {
     let currentBatch = '';
     let currentBatchFiles: string[] = [];
     const allFindings: ScanFinding[] = [];
+    const ABSOLUTE_MAX_FILE_SIZE = 50000;
     const MAX_COMBINED_LENGTH = 8000; 
+
+    const compiledCustomIgnores = compileIgnorePatterns(customIgnores);
 
     let policyInstructions = `CORE RULES:\n1. Hardcoded secrets (actual active production string values).\n2. Contextual leaks (explicitly logging secret variables to the console or exposing them to clients).`;
 
@@ -130,7 +199,7 @@ export class ArmorIQScanner {
     }
 
     for (const file of files) {
-      if (shouldIgnore(file.filename)) {
+      if (shouldIgnore(file.filename, compiledCustomIgnores)) {
         console.log(`🛡️ Skipping ignored file: ${file.filename}`);
         continue;
       }
@@ -142,6 +211,13 @@ export class ArmorIQScanner {
       const addedLines = extractAddedLines(file.patch);
       
       if (!addedLines || addedLines.trim().length === 0) {
+        continue;
+      }
+
+      if (addedLines.length > ABSOLUTE_MAX_FILE_SIZE) {
+        console.warn(
+          `Skipping ${file.filename}: diff exceeds ${ABSOLUTE_MAX_FILE_SIZE} characters.`
+        );
         continue;
       }
 
@@ -157,30 +233,58 @@ export class ArmorIQScanner {
       } else if (lowerFile.endsWith('.sol') || lowerFile.endsWith('.leo') || lowerFile.endsWith('.rs')) {
         fileContext = "THIS IS A SMART CONTRACT OR PRIVACY-PRESERVING ZERO-KNOWLEDGE CIRCUIT. Analyze it with decentralized architecture patterns in mind and reduce false positives for decentralized logic.";
       }
+      const wrapperOverhead =
+        `<file name="${file.filename}" context_warning="${fileContext}"></file>\n\n`.length;
 
-      const sanitizedLines = addedLines.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const fileContentChunk = `<file name="${file.filename}" context_warning="${fileContext}">\n${sanitizedLines}\n</file>\n\n`;
+      const maxContentSize = MAX_COMBINED_LENGTH - wrapperOverhead;
 
-      if (currentBatch.length + fileContentChunk.length > MAX_COMBINED_LENGTH && currentBatch.length > 0) {
-        const batchFindings = await processBatch(currentBatch, currentBatchFiles);
-        allFindings.push(...batchFindings);
-        
-        currentBatch = '';
-        currentBatchFiles = [];
+      const sanitizedLines = addedLines
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      const chunks =
+        sanitizedLines.length > maxContentSize
+          ? splitIntoChunks(sanitizedLines, maxContentSize)
+          : [sanitizedLines];
+
+      for (let i = 0; i < chunks.length; i++) {
+
+        const partSuffix =
+          chunks.length > 1
+            ? ` (part ${i + 1}/${chunks.length})`
+            : "";
+
+        const fileContentChunk =
+`<file name="${file.filename}${partSuffix}" context_warning="${fileContext}">
+${chunks[i]}
+</file>
+
+`;
+
+        if (
+          currentBatch.length + fileContentChunk.length > MAX_COMBINED_LENGTH &&
+          currentBatch.length > 0
+        ) {
+
+          const batchFindings = await processBatch(
+            currentBatch,
+            currentBatchFiles
+          );
+
+          allFindings.push(...batchFindings);
+
+          currentBatch = "";
+          currentBatchFiles = [];
+        }
+
+        currentBatch += fileContentChunk;
+
+        currentBatchFiles.push(
+          `${file.filename}${partSuffix}`
+        );
       }
 
-      currentBatch += fileContentChunk;
-      currentBatchFiles.push(file.filename);
-    }
-
-    if (currentBatch.length > 0) {
-      const batchFindings = await processBatch(currentBatch, currentBatchFiles);
-      allFindings.push(...batchFindings);
-    }
-
-    return allFindings;
-
-    async function processBatch(batchContent: string, batchFiles: string[]): Promise<ScanFinding[]> {
+  async function processBatch(batchContent: string, batchFiles: string[]): Promise<ScanFinding[]> {
       if (!batchContent.trim()) return [];
 
       const prompt = `Analyze the following aggregated code changes from a Pull Request for security vulnerabilities.
@@ -214,6 +318,7 @@ Format:
       let findings: ScanFinding[] = [];
       let success = false;
       let retries = 3;
+      let lastError: any = null;
 
       while (!success && retries > 0) {
         try {
@@ -269,6 +374,7 @@ CRITICAL RULES:
           findings = filterFalsePositives(sanitizedFindings);
           success = true;
         } catch (error: any) {
+          lastError = error;
           if (error.status === 429) {
             const retryAfterHeader = error.headers?.get?.('retry-after') || error.headers?.['retry-after'];
             const waitTime = retryAfterHeader ? parseInt(retryAfterHeader, 10) * 1000 : (4 - retries) * 25000;
@@ -286,14 +392,25 @@ CRITICAL RULES:
         }
       }
 
+      if (!success) {
+        throw new Error(`ScanFailedAnalysisEngineUnavailable: LLM scan failed after all retries. Last error: ${lastError?.message || lastError || 'Unknown error'}`);
+      }
+
       return findings;
     }
+
+    if (currentBatch.length > 0) {
+      const batchFindings = await processBatch(currentBatch, currentBatchFiles);
+      allFindings.push(...batchFindings);
+    }
+
+    return allFindings;
   }
 }
 
 // async function vulnerable_test(userInput: string) {
 //   await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE name = ${userInput}`);
 //   console.log(process.env.GROQ_API_KEY);
-// }
+//
 
 export const scanner = new ArmorIQScanner();
