@@ -214,6 +214,7 @@ Format:
       let findings: ScanFinding[] = [];
       let success = false;
       let retries = 3;
+      let lastError: any = null;
 
       while (!success && retries > 0) {
         try {
@@ -269,6 +270,7 @@ CRITICAL RULES:
           findings = filterFalsePositives(sanitizedFindings);
           success = true;
         } catch (error: any) {
+          lastError = error;
           if (error.status === 429) {
             const retryAfterHeader = error.headers?.get?.('retry-after') || error.headers?.['retry-after'];
             const waitTime = retryAfterHeader ? parseInt(retryAfterHeader, 10) * 1000 : (4 - retries) * 25000;
@@ -284,6 +286,10 @@ CRITICAL RULES:
             break;
           }
         }
+      }
+
+      if (!success) {
+        throw new Error(`ScanFailedAnalysisEngineUnavailable: LLM scan failed after all retries. Last error: ${lastError?.message || lastError || 'Unknown error'}`);
       }
 
       return findings;

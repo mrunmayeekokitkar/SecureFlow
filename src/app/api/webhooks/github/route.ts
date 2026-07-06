@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { createHmac, timingSafeEqual } from 'crypto';
-import { scanner } from '@/lib/armor/scanner';
+import { scanner, ScanFinding } from '@/lib/armor/scanner';
 import { iq } from '@/lib/armor/iq';
 import { developerReceivesAISecurityExplanations } from '@/ai/flows/developer-receives-ai-security-explanations';
 import { App, Octokit } from 'octokit';
@@ -323,7 +323,46 @@ export async function POST(req: NextRequest) {
       });
 
       // --- UPDATE: Pass the active policies to the scanner ---
-      const findings = await scanner.scanPullRequest(fileChanges, activePolicies);
+      let findings: ScanFinding[];
+      try {
+        findings = await scanner.scanPullRequest(fileChanges, activePolicies);
+      } catch (scanError: any) {
+        console.error('❌ SecureFlow Scan Failed:', scanError);
+        
+        // Update the pending comment to notify the user about the failure
+        await octokit.rest.issues.updateComment({
+          owner: repository?.owner?.login ?? '',
+          repo: repository?.name ?? '',
+          comment_id: pendingComment.data.id,
+          body: `### 🛡️ SecureFlow AI Security Report\n\n❌ **Scan Failed: Analysis Engine Unavailable**\n\nThe security scan failed because the AI analysis engine is currently unavailable (rate limits or repeated API errors). Please trigger the scan again by pushing a new commit or reopening this Pull Request.`,
+        });
+
+        // Create a failed check run
+        await octokit.rest.checks.create({
+          owner: repository?.owner?.login ?? '',
+          repo: repository?.name ?? '',
+          name: 'SecureFlow Scan',
+          head_sha: pull_request?.head?.sha ?? '',
+          status: 'completed',
+          conclusion: 'failure',
+          output: {
+            title: 'Scan Failed: Analysis Engine Unavailable',
+            summary: `SecureFlow AI scan failed because the analysis engine is currently unavailable. Error details: ${scanError.message || String(scanError)}`,
+          }
+        });
+
+        // Create audit log for failed scan
+        await prisma.auditLog.create({
+          data: {
+            userId: userId,
+            action: 'Scan Failed',
+            resource: `${repository?.full_name ?? ''}#${pull_request?.number ?? 0}`,
+            metadata: { error: scanError.message || String(scanError) }
+          }
+        });
+
+        return NextResponse.json({ success: false, error: 'Scan Failed: Analysis Engine Unavailable' }, { status: 502 });
+      }
       // -------------------------------------------------------
       
       const enrichedFindings = await Promise.all(findings.map(async (finding: any) => {
